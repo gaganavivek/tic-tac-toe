@@ -1,0 +1,30 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Game {
+  id        Int     @id @default(autoincrement())
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  playerX   String? @map("player_x")
+  playerO   String? @map("player_o")
+  status    String  @default("in_progress")
+  board     String
+  nextTurn  String  @map("next_turn")
+  winner    String?
+  moves     Move[]  @relation("GameMoves")
+}
+
+model Move {
+  id        Int     @id @default(autoincrement())
+  gameId    Int     @map("game_id")
+  player    String
+  position  Int
+  createdAt DateTime @default(now()) @map("created_at")
+  game      Game    @relation(fields: [gameId], references: [id], name: "GameMoves")
+}
