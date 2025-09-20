@@ -30,13 +30,23 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { playerX, playerO, startingPlayer } = body || {};
-    const starter = (startingPlayer === 'O') ? 'O' : 'X';
+    let playerX = null, playerO = null, startingPlayer = 'X';
+    
+    // Only try to parse body if content exists
+    if (request.headers.get('content-length') !== '0') {
+      try {
+        const body = await request.json();
+        playerX = body.playerX;
+        playerO = body.playerO;
+        startingPlayer = body.startingPlayer === 'O' ? 'O' : 'X';
+      } catch {
+        // Ignore JSON parse errors and use defaults
+      }
+    }
 
     const result = await pool.query(
       `INSERT INTO games (player_x, player_o, board, next_turn, status) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [playerX || null, playerO || null, '_________', starter, 'in_progress']
+      [playerX, playerO, '_________', startingPlayer, 'in_progress']
     );
 
     return NextResponse.json(result.rows[0], { status:201 });

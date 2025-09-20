@@ -1,1 +1,9 @@
-{}
+{
+  "/api/stats/daily/route": "app/api/stats/daily/route.js",
+  "/api/games/route": "app/api/games/route.js",
+  "/api/games/[id]/route": "app/api/games/[id]/route.js",
+  "/api/games/[id]/move/route": "app/api/games/[id]/move/route.js",
+  "/stats/page": "app/stats/page.js",
+  "/page": "app/page.js",
+  "/game/[id]/page": "app/game/[id]/page.js"
+}

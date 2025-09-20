@@ -1,169 +1,225 @@
-// File: src/lib/db.ts
 import { Pool } from 'pg';
+
+interface MockQuery {
+  text: string;
+  params?: any[];
+}
 
 // Minimal in-memory mock DB for demo when DATABASE_URL is not set.
 function createInMemoryPool() {
   let gameId = 1;
   let moveId = 1;
+  let resultId = 1;
   const games: any[] = [];
   const moves: any[] = [];
+  const gameResults: any[] = [];
 
-  function now() { return new Date().toISOString(); }
+  function now() { 
+    return new Date().toISOString(); 
+  }
 
-  async function query(text: string, params: any[] = []) {
-    const q = text.trim();
+  async function mockQuery(text: any, params: any[] = []) {
+    // Accept pool.query(text) or pool.query({ text, values })
+    if (typeof text === 'object' && text !== null) {
+      params = text.values ?? text.params ?? params;
+      text = text.text ?? text.query ?? String(text);
+    }
+    console.log('Executing query:', { text, params });
 
     // handle transaction control
-    if (/^BEGIN/i.test(q) || /^COMMIT/i.test(q) || /^ROLLBACK/i.test(q)) {
+    if (/^(BEGIN|COMMIT|ROLLBACK)/i.test(text)) {
       return { rows: [], rowCount: 0 };
     }
 
-    if (/^SELECT COUNT\(\*\)/i.test(q)) {
-      const status = params && params[0];
-      const count = status ? games.filter(g => g.status === status).length : games.length;
+    // Generic COUNT(*) handler for game_results and moves
+    if (/COUNT\(\*\)/i.test(text) && /game_results/i.test(text)) {
+      const count = gameResults.length;
+      console.log('Mock COUNT(*) FROM game_results =>', count);
       return { rows: [{ count }], rowCount: 1 };
     }
 
-    if (/SELECT .* FROM moves/i.test(q) && /WHERE game_id = \$1/i.test(q)) {
-      const gid = params[0];
-      const rows = moves.filter(m => m.game_id === gid).map(r => ({ id: r.id, player: r.player, position: r.position, created_at: r.created_at }));
-      return { rows, rowCount: rows.length };
-    }
-
-    if (/SELECT .* FROM games WHERE id = \$1/i.test(q)) {
-      const gid = params[0];
-      const g = games.find(x => x.id === gid);
-      return { rows: g ? [g] : [], rowCount: g ? 1 : 0 };
-    }
-
-    if (/SELECT \* FROM games WHERE player_o IS NULL/i.test(q)) {
-      const found = games.find(g => (g.player_o === null || g.player_o === undefined) && g.status === 'in_progress');
-      return { rows: found ? [found] : [], rowCount: found ? 1 : 0 };
-    }
-
-    if (/INSERT INTO games/i.test(q)) {
+    // CREATE new game
+    if (/INSERT INTO games/i.test(text)) {
       const [player_x, player_o, board, next_turn, status] = params;
-      const g = { id: gameId++, created_at: now(), updated_at: now(), player_x: player_x ?? null, player_o: player_o ?? null, board, next_turn, status, winner: null };
-      games.push(g);
-      return { rows: [g], rowCount: 1 };
+      const game = { 
+        id: gameId++, 
+        created_at: now(), 
+        updated_at: now(), 
+        player_x: player_x ?? null, 
+        player_o: player_o ?? null, 
+        board: board || '_________',
+        next_turn: next_turn || 'X',
+        status: status || 'in_progress',
+        winner: null
+      };
+      games.push(game);
+      console.log('Created game:', game);
+      return { rows: [game], rowCount: 1 };
     }
 
-    if (/INSERT INTO moves/i.test(q)) {
+    // CREATE move
+    if (/INSERT INTO moves/i.test(text)) {
       const [game_id, player, position] = params;
-      const m = { id: moveId++, game_id, player, position, created_at: now() };
-      moves.push(m);
-      return { rows: [], rowCount: 1 };
+      const move = { 
+        id: moveId++, 
+        game_id, 
+        player, 
+        position, 
+        created_at: now() 
+      };
+      moves.push(move);
+      console.log('Created move:', move);
+      return { rows: [move], rowCount: 1 };
     }
 
-    if (/DELETE FROM moves WHERE game_id = \$1/i.test(q)) {
-      const gid = params[0];
-      const before = moves.length;
-      for (let i = moves.length - 1; i >= 0; i--) {
-        if (moves[i].game_id === gid) moves.splice(i, 1);
-      }
-      return { rows: [], rowCount: before - moves.length };
+    // CREATE game result
+    if (/INSERT INTO game_results/i.test(text)) {
+      const [game_id, winner, player_x, player_o, moves_count, is_draw] = params;
+      const result = {
+        id: resultId++,
+        game_id,
+        winner,
+        player_x,
+        player_o,
+        moves_count: Number(moves_count),
+        is_draw: Boolean(is_draw),
+        finished_at: now(),
+        date: new Date().toISOString().split('T')[0]
+      };
+      gameResults.push(result);
+      console.log('Created game result:', result);
+      return { rows: [result], rowCount: 1 };
     }
 
-    if (/DELETE FROM moves WHERE id = \$1/i.test(q)) {
-      const id = params[0];
-      const idx = moves.findIndex(m => m.id === id);
-      if (idx >= 0) { moves.splice(idx, 1); return { rows: [], rowCount: 1 }; }
-      return { rows: [], rowCount: 0 };
-    }
-
-    if (/UPDATE games SET/i.test(q) && /WHERE id = \$/.test(q)) {
-      // naive parsing: apply params by position mapping for common updates used
-      // We support two main patterns used in code: update board,next_turn,status,winner WHERE id = $5
-      if (/board = \$1/i.test(q)) {
-        const board = params[0];
-        const next_turn = params[1];
-        const status = params[2];
-        const winner = params[3];
-        const id = params[4];
-        const g = games.find(x => x.id === id);
-        if (g) { g.board = board; g.next_turn = next_turn; g.status = status; g.winner = winner; g.updated_at = now(); }
-        return { rows: [], rowCount: g ? 1 : 0 };
-      }
-
-      // generic partial update: assume last param is id and earlier params map to columns
-      const id = params[params.length - 1];
-      const g = games.find(x => x.id === id);
-      if (g) {
-        // apply known fields from the SET clause when possible
-        if (/player_x = \$1/.test(q)) g.player_x = params[0];
-        if (/player_o = \$/.test(q)) {}
-        g.updated_at = now();
-      }
-      return { rows: [], rowCount: g ? 1 : 0 };
-    }
-
-    if (/SELECT id, player_x, player_o, status, next_turn, board, updated_at FROM games/i.test(q)) {
-      // basic list with optional status filter
-      const limit = params[params.length - 2];
-      const offset = params[params.length - 1];
-      const status = params.length > 2 ? params[0] : null;
-      let list = games.slice();
-      if (status) list = list.filter(g => g.status === status);
-      list = list.sort((a,b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
-      const rows = list.slice(offset, offset + limit).map(g => ({ id: g.id, player_x: g.player_x, player_o: g.player_o, status: g.status, next_turn: g.next_turn, board: g.board, updated_at: g.updated_at }));
-      return { rows, rowCount: rows.length };
-    }
-
-    if (/SELECT COUNT\(\*\) FROM games/i.test(q)) {
-      const status = params && params[0];
-      const count = status ? games.filter(g => g.status === status).length : games.length;
+    // COUNT total game_results (robust matcher)
+    if (/COUNT\(\*\)/i.test(text) && /game_results/i.test(text)) {
+      const count = gameResults.length;
+      console.log('Mock COUNT(*) FROM game_results =>', count);
+      // Postgres returns counts as strings sometimes; keep number for convenience
       return { rows: [{ count }], rowCount: 1 };
     }
 
-    if (/SELECT .* FROM moves WHERE game_id = \$1 ORDER BY id ASC/i.test(q)) {
-      const gid = params[0];
-      const rows = moves.filter(m => m.game_id === gid).sort((a,b)=>a.id-b.id).map(r => ({ player: r.player, position: r.position }));
+    // READ game
+    if (/SELECT.*FROM games WHERE id = \$1/i.test(text)) {
+      const id = params[0];
+      const game = games.find(g => g.id === id);
+      return { rows: game ? [game] : [], rowCount: game ? 1 : 0 };
+    }
+
+    // READ moves for game
+    if (/SELECT.*FROM moves WHERE game_id = \$1/i.test(text)) {
+      const gameId = params[0];
+      const gameMoves = moves.filter(m => m.game_id === gameId);
+      return { rows: gameMoves, rowCount: gameMoves.length };
+    }
+
+    // COUNT moves
+    if (/SELECT COUNT\(\*\) FROM moves/i.test(text)) {
+      const gameId = params[0];
+      const count = moves.filter(m => m.game_id === gameId).length;
+      return { rows: [{ count }], rowCount: 1 };
+    }
+
+    // UPDATE game
+    if (/UPDATE games SET/i.test(text) && /WHERE id = \$\d+$/i.test(text)) {
+      const id = params[params.length - 1];
+      const game = games.find(g => g.id === id);
+      if (game) {
+        if (/board = \$1/.test(text)) {
+          const [board, next_turn, status, winner] = params;
+          game.board = board;
+          game.next_turn = next_turn;
+          game.status = status;
+          game.winner = winner;
+          game.updated_at = now();
+        }
+        console.log('Updated game:', game);
+      }
+      return { rows: game ? [game] : [], rowCount: game ? 1 : 0 };
+    }
+
+    // READ game stats
+    if (/SELECT.*FROM game_results/i.test(text) && /GROUP BY date/i.test(text)) {
+      console.log('Getting stats from', gameResults.length, 'results');
+      const results = new Map();
+      
+      for (const result of gameResults) {
+        const date = result.date;
+        const stats = results.get(date) || {
+          date,
+          total_games: 0,
+          x_wins: 0,
+          o_wins: 0,
+          draws: 0,
+          total_moves: 0
+        };
+        
+        stats.total_games++;
+        if (result.winner === 'X') stats.x_wins++;
+        else if (result.winner === 'O') stats.o_wins++;
+        else if (result.is_draw) stats.draws++;
+        stats.total_moves += result.moves_count;
+        
+        results.set(date, stats);
+      }
+
+      const rows = Array.from(results.values()).map(stat => ({
+        date: stat.date,
+        total_games: Number(stat.total_games),
+        x_wins: Number(stat.x_wins),
+        o_wins: Number(stat.o_wins),
+        draws: Number(stat.draws),
+        avg_moves: Number((stat.total_moves / stat.total_games).toFixed(2))
+      })).sort((a, b) => b.date.localeCompare(a.date));
+
+      console.log('Computed stats:', rows);
       return { rows, rowCount: rows.length };
     }
 
-    if (/SELECT id FROM moves WHERE game_id = \$1 ORDER BY id DESC LIMIT 1/i.test(q)) {
-      const gid = params[0];
-      const mm = moves.filter(m => m.game_id === gid).sort((a,b)=>b.id-a.id);
-      return { rows: mm.length ? [{ id: mm[0].id }] : [], rowCount: mm.length ? 1 : 0 };
+    // COUNT total game_results
+    if (/SELECT COUNT\(\*\) FROM game_results/i.test(text)) {
+      const count = gameResults.length;
+      return { rows: [{ count }], rowCount: 1 };
     }
 
-    if (/SELECT \* FROM games WHERE player_o IS NULL AND status = 'in_progress' LIMIT 1/i.test(q)) {
-      const found = games.find(g => (g.player_o === null || g.player_o === undefined) && g.status === 'in_progress');
-      return { rows: found ? [found] : [], rowCount: found ? 1 : 0 };
+    // SELECT * FROM game_results [WHERE ...]
+    if (/SELECT \*/i.test(text) && /FROM game_results/i.test(text)) {
+      // very small parser for WHERE date >= $1 AND date <= $2
+      const paramsMap: any = {};
+      // naive: if params provided and look like dates, filter by them
+      if (params && params.length === 2) {
+        const [from, to] = params;
+        const rows = gameResults.filter(r => r.date >= from && r.date <= to);
+        return { rows, rowCount: rows.length };
+      }
+      return { rows: gameResults, rowCount: gameResults.length };
     }
 
-    if (/DELETE FROM games WHERE id = \$1 RETURNING id/i.test(q)) {
-      const id = params[0];
-      const idx = games.findIndex(g => g.id === id);
-      if (idx >= 0) { games.splice(idx, 1); return { rows: [{ id }], rowCount: 1 }; }
-      return { rows: [], rowCount: 0 };
-    }
-
-    // fallback
-    console.warn('Unrecognized mock query:', q);
+    console.warn('Unhandled query:', text);
     return { rows: [], rowCount: 0 };
   }
 
-  function connect() {
-    return Promise.resolve({ query, release() {} });
-  }
-
-  return { query, connect };
+  return {
+    query: mockQuery,
+    connect: () => Promise.resolve({ 
+      query: mockQuery, 
+      release: () => {} 
+    })
+  };
 }
 
 declare global {
-  // eslint-disable-next-line no-var
-  var __pgPool: any | undefined;
+  var __pgPool: any;
 }
 
 let pool: any;
 if (process.env.DATABASE_URL) {
-  pool = globalThis.__pgPool ?? new Pool({ connectionString: process.env.DATABASE_URL });
-  if (!globalThis.__pgPool) globalThis.__pgPool = pool;
+  pool = global.__pgPool ?? new Pool({ connectionString: process.env.DATABASE_URL });
+  if (!global.__pgPool) global.__pgPool = pool;
 } else {
   console.warn('DATABASE_URL not set — using in-memory demo DB');
-  pool = globalThis.__pgPool ?? createInMemoryPool();
-  if (!globalThis.__pgPool) globalThis.__pgPool = pool;
+  pool = global.__pgPool ?? createInMemoryPool();
+  if (!global.__pgPool) global.__pgPool = pool;
 }
 
 export { pool };

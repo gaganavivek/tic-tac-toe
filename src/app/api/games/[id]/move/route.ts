@@ -84,6 +84,41 @@ export async function PUT(request: Request, context: any) {
       [moveResult.board, nextTurn, status, winner, gameId]
     );
 
+    // If game is finished, record the result
+    if (status === 'finished') {
+      console.log('Game finished, recording result:', { gameId, winner, status, moveResult });
+      
+      // COUNT(*) can return different shapes depending on the DB client or mock layer.
+      // Be defensive: try to parse the returned count, otherwise fall back to fetching move rows.
+      const countRes = (await client.query('SELECT COUNT(*) FROM moves WHERE game_id = $1', [gameId]));
+      let movesCount: number | undefined = undefined;
+      if (countRes && Array.isArray(countRes.rows) && countRes.rows[0]) {
+        const raw = countRes.rows[0].count ?? countRes.rows[0].cnt ?? countRes.rows[0].count_total;
+        if (typeof raw === 'number') movesCount = raw;
+        else if (typeof raw === 'string' && raw.trim() !== '') movesCount = Number(raw);
+      }
+      if (typeof movesCount !== 'number' || Number.isNaN(movesCount)) {
+        // fallback: query move rows and count them
+        const movesResCheck = await client.query('SELECT id FROM moves WHERE game_id = $1', [gameId]);
+        movesCount = Array.isArray(movesResCheck.rows) ? movesResCheck.rows.length : 0;
+      }
+      console.log('Moves count:', movesCount);
+      
+      try {
+        // Check if it's a draw
+        const isDraw = winner === null && !moveResult.board.includes('_') && !moveResult.board.includes('.');
+        
+        await client.query(
+          `INSERT INTO game_results (game_id, winner, player_x, player_o, moves_count, is_draw) 
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [gameId, isDraw ? null : winner, game.player_x, game.player_o, movesCount, isDraw]
+        );
+        console.log('Game result recorded successfully', { isDraw, winner, movesCount });
+      } catch (err) {
+        console.error('Failed to record game result:', err);
+      }
+    }
+
     // fetch updated game and moves
     const updatedGameRes = await client.query('SELECT * FROM games WHERE id = $1', [gameId]);
     const movesRes = await client.query('SELECT id, player, position, created_at FROM moves WHERE game_id = $1 ORDER BY id ASC', [gameId]);
