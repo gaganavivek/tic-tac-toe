@@ -10,9 +10,11 @@ function createInMemoryPool() {
   let gameId = 1;
   let moveId = 1;
   let resultId = 1;
+  let userId = 1;
   const games: any[] = [];
   const moves: any[] = [];
   const gameResults: any[] = [];
+  const users: any[] = [];
 
   function now() { 
     return new Date().toISOString(); 
@@ -72,6 +74,20 @@ function createInMemoryPool() {
       return { rows: [move], rowCount: 1 };
     }
 
+    // CREATE user
+    if (/INSERT INTO users/i.test(text)) {
+      const [username, display_name] = params;
+      const user = {
+        id: userId++,
+        username: username ?? null,
+        display_name: display_name ?? null,
+        created_at: now()
+      };
+      users.push(user);
+      console.log('Created user:', user);
+      return { rows: [user], rowCount: 1 };
+    }
+
     // CREATE game result
     if (/INSERT INTO game_results/i.test(text)) {
       const [game_id, winner, player_x, player_o, moves_count, is_draw] = params;
@@ -111,6 +127,23 @@ function createInMemoryPool() {
       const gameId = params[0];
       const gameMoves = moves.filter(m => m.game_id === gameId);
       return { rows: gameMoves, rowCount: gameMoves.length };
+    }
+
+    // READ user by id or select username
+    if (/SELECT .* FROM users WHERE id = \$1/i.test(text) || /SELECT username FROM users WHERE id = \$1/i.test(text)) {
+      const id = params[0];
+      const user = users.find(u => u.id === id);
+      if (!user) return { rows: [], rowCount: 0 };
+      // Try to mimic selective column projection
+      if (/SELECT username FROM users/i.test(text)) {
+        return { rows: [{ username: user.username }], rowCount: 1 };
+      }
+      return { rows: [user], rowCount: 1 };
+    }
+
+    // READ all users
+    if (/SELECT \* FROM users/i.test(text)) {
+      return { rows: users, rowCount: users.length };
     }
 
     // COUNT moves

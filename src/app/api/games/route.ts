@@ -31,14 +31,28 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     let playerX = null, playerO = null, startingPlayer = 'X';
-    
+
     // Only try to parse body if content exists
     if (request.headers.get('content-length') !== '0') {
       try {
         const body = await request.json();
-        playerX = body.playerX;
-        playerO = body.playerO;
+        playerX = body.playerX ?? null;
+        playerO = body.playerO ?? null;
         startingPlayer = body.startingPlayer === 'O' ? 'O' : 'X';
+
+        // support new fields player_x_id / player_o_id which reference users
+        if (body.player_x_id) {
+          try {
+            const ux = await pool.query('SELECT username FROM users WHERE id = $1', [Number(body.player_x_id)]);
+            if (ux.rowCount) playerX = ux.rows[0].username;
+          } catch (e) { /* ignore lookup errors */ }
+        }
+        if (body.player_o_id) {
+          try {
+            const uo = await pool.query('SELECT username FROM users WHERE id = $1', [Number(body.player_o_id)]);
+            if (uo.rowCount) playerO = uo.rows[0].username;
+          } catch (e) { /* ignore lookup errors */ }
+        }
       } catch {
         // Ignore JSON parse errors and use defaults
       }

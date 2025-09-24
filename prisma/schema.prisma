@@ -7,24 +7,71 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Game {
-  id        Int     @id @default(autoincrement())
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-  playerX   String? @map("player_x")
-  playerO   String? @map("player_o")
-  status    String  @default("in_progress")
-  board     String
-  nextTurn  String  @map("next_turn")
-  winner    String?
-  moves     Move[]  @relation("GameMoves")
+model game_results {
+  id                                    Int      @id @default(autoincrement())
+  game_id                               Int      @unique
+  winner                                String?
+  player_x                              String?  @db.VarChar(255)
+  player_o                              String?  @db.VarChar(255)
+  player_x_id                           Int?
+  player_o_id                           Int?
+  finished_at                           DateTime @default(now()) @db.Timestamptz(6)
+  date                                  DateTime @default(dbgenerated("(now())::date")) @db.Date
+  moves_count                           Int      @default(0)
+  is_draw                               Boolean  @default(false)
+  games                                 games    @relation(fields: [game_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_game_results_player_o_idTousers users?   @relation("game_results_player_o_idTousers", fields: [player_o_id], references: [id], onUpdate: NoAction)
+  users_game_results_player_x_idTousers users?   @relation("game_results_player_x_idTousers", fields: [player_x_id], references: [id], onUpdate: NoAction)
+
+  @@index([date], map: "idx_game_results_date")
 }
 
-model Move {
-  id        Int     @id @default(autoincrement())
-  gameId    Int     @map("game_id")
-  player    String
-  position  Int
-  createdAt DateTime @default(now()) @map("created_at")
-  game      Game    @relation(fields: [gameId], references: [id], name: "GameMoves")
+model games {
+  id                             Int           @id @default(autoincrement())
+  created_at                     DateTime?     @default(now()) @db.Timestamptz(6)
+  updated_at                     DateTime?     @default(now()) @db.Timestamptz(6)
+  player_x                       String?
+  player_o                       String?
+  player_x_id                    Int?
+  player_o_id                    Int?
+  status                         String        @default("in_progress")
+  board                          String        @db.Char(9)
+  next_turn                      String        @default("X") @db.Char(1)
+  winner                         String?
+  game_results                   game_results?
+  users_games_player_o_idTousers users?        @relation("games_player_o_idTousers", fields: [player_o_id], references: [id], onUpdate: NoAction)
+  users_games_player_x_idTousers users?        @relation("games_player_x_idTousers", fields: [player_x_id], references: [id], onUpdate: NoAction)
+  moves                          moves[]
+
+  @@index([updated_at], map: "idx_games_updated_at")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model moves {
+  id         Int       @id @default(autoincrement())
+  game_id    Int
+  player     String    @db.Char(1)
+  position   Int
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  games      games     @relation(fields: [game_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([game_id], map: "idx_moves_game_id")
+}
+
+model users {
+  id                                           Int            @id @default(autoincrement())
+  username                                     String         @unique @db.VarChar(150)
+  display_name                                 String?        @db.VarChar(255)
+  email                                        String?        @unique @db.VarChar(320)
+  avatar_url                                   String?
+  provider                                     String?        @db.VarChar(50)
+  provider_id                                  String?
+  created_at                                   DateTime?      @default(now()) @db.Timestamptz(6)
+  updated_at                                   DateTime?      @default(now()) @db.Timestamptz(6)
+  game_results_game_results_player_o_idTousers game_results[] @relation("game_results_player_o_idTousers")
+  game_results_game_results_player_x_idTousers game_results[] @relation("game_results_player_x_idTousers")
+  games_games_player_o_idTousers               games[]        @relation("games_player_o_idTousers")
+  games_games_player_x_idTousers               games[]        @relation("games_player_x_idTousers")
+
+  @@index([username], map: "idx_users_username")
 }
